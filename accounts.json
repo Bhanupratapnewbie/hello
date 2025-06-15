@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Account1",
+    "tickers": ["BTCUSDT", "ETHUSDT"]
+  },
+  {
+    "name": "Account2",
+    "tickers": ["BNBUSDT"]
+  }
+]
