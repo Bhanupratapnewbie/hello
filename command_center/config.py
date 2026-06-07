@@ -77,6 +77,21 @@ class Settings(BaseSettings):
     command_timeout: int = Field(default=300, alias="CC_COMMAND_TIMEOUT")
     max_heal_attempts: int = Field(default=3, alias="CC_MAX_HEAL_ATTEMPTS")
 
+    # --- Progress supervisor (watchdog) ---
+    # A meta-layer that watches the whole task: it caps the total number of steps,
+    # detects when the same action repeats (a loop), and periodically asks the
+    # uncensored base model to judge whether the task is still on the right path —
+    # continuing, re-planning, asking the admin, or aborting accordingly.
+    supervisor_enabled: bool = Field(default=True, alias="CC_SUPERVISOR")
+    # Hard ceiling on total executed steps for one request (loop/runaway guard).
+    max_total_steps: int = Field(default=40, alias="CC_MAX_TOTAL_STEPS")
+    # Run a base-model on-track check every N completed steps (0 disables checks).
+    supervisor_interval: int = Field(default=4, alias="CC_SUPERVISOR_INTERVAL")
+    # Number of identical consecutive actions that counts as a stuck loop.
+    loop_threshold: int = Field(default=3, alias="CC_LOOP_THRESHOLD")
+    # Max times the supervisor may re-plan the remaining work before giving up.
+    max_replans: int = Field(default=2, alias="CC_MAX_REPLANS")
+
     @property
     def effective_api_key(self) -> str:
         """The API key actually used for model calls."""

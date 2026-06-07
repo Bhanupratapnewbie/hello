@@ -46,6 +46,21 @@ _CODER_SYSTEM = (
     "requested file, with no markdown fences, commentary, or explanation."
 )
 
+_SUPERVISOR_SYSTEM = (
+    "You are the progress supervisor of an autonomous command center. You watch a "
+    "task that is already in flight and judge whether it is still on the right "
+    "path toward the administrator's goal, or whether it is stuck/looping/drifting. "
+    "You are given the original goal, the work done so far, and the steps still "
+    "queued. Respond ONLY with a JSON object: "
+    '{"verdict": "continue|change|ask_admin|abort", "reason": str, '
+    '"question": str}. '
+    "Use 'continue' if progress is healthy. Use 'change' if the remaining plan is "
+    "wrong, redundant, or looping and should be re-planned. Use 'ask_admin' if you "
+    "genuinely need a decision/credential/info from the administrator (put it in "
+    "'question'). Use 'abort' only if the goal is impossible or already met. Be "
+    "decisive and brief."
+)
+
 
 @dataclass
 class Step:
@@ -55,6 +70,13 @@ class Step:
     path: str = ""
     instruction: str = ""
     prompt: str = ""
+    question: str = ""
+
+
+@dataclass
+class SupervisorVerdict:
+    verdict: str
+    reason: str = ""
     question: str = ""
 
 
@@ -124,18 +146,160 @@ class Brain:
         )
         await self.notify(f"plan ({len(steps)} steps):\n{plan_view}")
 
+        await self._execute_plan(request, steps)
+
+    async def _execute_plan(self, request: str, steps: list[Step]) -> None:
+        """Run a plan under the progress supervisor (watchdog).
+
+        The supervisor guards the whole task end-to-end: it caps the total number
+        of executed steps, detects when the same action repeats (a loop), and
+        periodically asks the base model to judge whether the task is still on the
+        right path — continuing, re-planning the rest, asking the admin, or
+        aborting. With the supervisor disabled it degrades to a plain run.
+        """
+        sup = self.settings.supervisor_enabled
         context: list[str] = []
-        for i, step in enumerate(steps, start=1):
-            await self.notify(f"step {i}/{len(steps)}: {step.description}")
+        pending: list[Step] = list(steps)
+        recent_sigs: list[str] = []
+        executed = 0
+        replans = 0
+
+        while pending:
+            if sup and executed >= self.settings.max_total_steps:
+                await self.notify(
+                    "supervisor: hit the step ceiling "
+                    f"({self.settings.max_total_steps}) — stopping to avoid a "
+                    "runaway loop"
+                )
+                return
+
+            step = pending.pop(0)
+            executed += 1
+            await self.notify(f"step {executed}: {step.description}")
             try:
                 outcome = await self._run_step(step, context)
             except ModelError as exc:
-                await self.notify(f"model error on step {i}: {exc}")
+                await self.notify(f"model error on step {executed}: {exc}")
                 return
             if outcome is not None:
                 context.append(outcome)
 
+            if not sup:
+                continue
+
+            recent_sigs.append(_step_signature(step))
+            looping = _is_looping(recent_sigs, self.settings.loop_threshold)
+            interval = self.settings.supervisor_interval
+            due = interval > 0 and executed % interval == 0
+
+            if pending and (looping or due):
+                if looping:
+                    await self.notify(
+                        "supervisor: same action repeated "
+                        f"{self.settings.loop_threshold}x — checking course"
+                    )
+                verdict = await self._supervise(request, context, pending)
+                await self.notify(
+                    f"supervisor verdict: {verdict.verdict} — {verdict.reason}"
+                )
+                if verdict.verdict == "abort":
+                    await self.notify("supervisor: aborting task")
+                    return
+                if verdict.verdict == "ask_admin":
+                    question = verdict.question or verdict.reason or (
+                        "I need your input to proceed — how should I continue?"
+                    )
+                    answer = await self.ask_admin(question)
+                    context.append(f"admin guidance: {question} -> {answer}")
+                    recent_sigs.clear()
+                elif verdict.verdict == "change":
+                    if replans >= self.settings.max_replans:
+                        await self.notify(
+                            "supervisor: re-plan limit reached — asking admin"
+                        )
+                        answer = await self.ask_admin(
+                            "I'm stuck re-planning this task. How should I "
+                            "proceed?"
+                        )
+                        context.append(f"admin guidance -> {answer}")
+                        recent_sigs.clear()
+                    else:
+                        replans += 1
+                        new_steps = await self._replan(
+                            request, context, pending, verdict.reason
+                        )
+                        if new_steps:
+                            pending = new_steps
+                            recent_sigs.clear()
+                            new_view = "\n".join(
+                                f"{j + 1}. [{s.action}] {s.description}"
+                                for j, s in enumerate(pending)
+                            )
+                            await self.notify(
+                                f"supervisor re-planned ({len(pending)} "
+                                f"steps):\n{new_view}"
+                            )
+
         await self.notify("all steps complete")
+
+    async def _supervise(
+        self, request: str, context: list[str], pending: list[Step]
+    ) -> SupervisorVerdict:
+        """Ask the base model to judge whether the task is on the right path."""
+        done = ("\n".join(context))[-4000:]
+        queued = "\n".join(f"- [{s.action}] {s.description}" for s in pending)
+        user = (
+            f"Original goal:\n{request}\n\n"
+            f"Work done so far:\n{done or '(nothing yet)'}\n\n"
+            f"Steps still queued:\n{queued or '(none)'}\n\n"
+            "Is this on the right path? Respond with the JSON verdict."
+        )
+        try:
+            raw = await self._complete_role(
+                "planner",
+                [
+                    ChatMessage("system", _SUPERVISOR_SYSTEM),
+                    ChatMessage("user", user),
+                ],
+                temperature=0.0,
+            )
+        except ModelError as exc:
+            # Supervisor must never crash the task; default to continuing.
+            await self.notify(f"supervisor check failed ({exc}); continuing")
+            return SupervisorVerdict("continue", "supervisor unavailable")
+        return parse_verdict(raw)
+
+    async def _replan(
+        self,
+        request: str,
+        context: list[str],
+        pending: list[Step],
+        reason: str,
+    ) -> list[Step]:
+        """Re-plan the remaining work after the supervisor flags a problem."""
+        done = ("\n".join(context))[-4000:]
+        queued = "\n".join(f"- [{s.action}] {s.description}" for s in pending)
+        user = (
+            f"Original goal:\n{request}\n\n"
+            f"Work already done:\n{done or '(nothing yet)'}\n\n"
+            f"The current remaining plan was flagged as off-track: {reason}\n"
+            f"Current remaining steps:\n{queued or '(none)'}\n\n"
+            "Produce a corrected plan for ONLY the remaining work to reach the "
+            "goal, avoiding the repeated/ineffective actions above."
+        )
+        try:
+            raw = await self._complete_role(
+                "planner",
+                [
+                    ChatMessage("system", _PLANNER_SYSTEM),
+                    ChatMessage("user", user),
+                ],
+                temperature=0.1,
+            )
+        except ModelError as exc:
+            await self.notify(f"supervisor re-plan failed ({exc}); keeping plan")
+            return pending
+        return parse_plan(raw)
 
     async def _run_step(self, step: Step, context: list[str]) -> str | None:
         if step.action == "shell":
@@ -213,3 +377,51 @@ def parse_plan(raw: str) -> list[Step]:
             )
         )
     return steps
+
+
+def _step_signature(step: Step) -> str:
+    """A stable identity for a step, used to detect repeating actions."""
+    payload = step.command or step.path or step.prompt or step.question
+    return f"{step.action}:{payload.strip()}"
+
+
+def _is_looping(signatures: list[str], threshold: int) -> bool:
+    """True when the last ``threshold`` signatures are identical and non-empty."""
+    if threshold <= 1 or len(signatures) < threshold:
+        return False
+    window = signatures[-threshold:]
+    last = window[0]
+    # An empty payload (e.g. a bare description) is too weak to call a loop.
+    if not last or ":" not in last or not last.split(":", 1)[1]:
+        return False
+    return all(sig == last for sig in window)
+
+
+_VALID_VERDICTS = {"continue", "change", "ask_admin", "abort"}
+
+
+def parse_verdict(raw: str) -> SupervisorVerdict:
+    """Parse a supervisor response, defaulting to 'continue' on any ambiguity."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if "\n" in text:
+            text = text.split("\n", 1)[1]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return SupervisorVerdict("continue", "unparseable verdict")
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return SupervisorVerdict("continue", "unparseable verdict")
+    if not isinstance(data, dict):
+        return SupervisorVerdict("continue", "unparseable verdict")
+    verdict = str(data.get("verdict", "")).strip().lower()
+    if verdict not in _VALID_VERDICTS:
+        verdict = "continue"
+    return SupervisorVerdict(
+        verdict=verdict,
+        reason=str(data.get("reason", "")).strip(),
+        question=str(data.get("question", "")).strip(),
+    )

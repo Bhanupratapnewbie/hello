@@ -47,6 +47,19 @@ Runs shell commands in a workspace, captures stdout/stderr natively, and on fail
 sends the error to the `fixer` model, applies the suggested corrected command, and
 retries up to `CC_MAX_HEAL_ATTEMPTS` times. Can also write generated files.
 
+### 2b. The Supervisor — progress watchdog (`brain.py`)
+Wraps the whole task end-to-end so a long job can't silently spin or drift:
+- **Step ceiling** — a hard cap (`CC_MAX_TOTAL_STEPS`) on total executed steps.
+- **Loop detection** — if the same action repeats `CC_LOOP_THRESHOLD` times in a
+  row, it breaks out and re-evaluates instead of grinding forever.
+- **On-track checks** — every `CC_SUPERVISOR_INTERVAL` steps (and whenever a loop
+  is detected) the **uncensored base** judges the run and returns a verdict:
+  `continue`, `change` (re-plan the remaining work, up to `CC_MAX_REPLANS`),
+  `ask_admin` (post a question into the Telegram chat and wait), or `abort`.
+
+Every decision is streamed into the Telegram chat. Set `CC_SUPERVISOR=false` to
+disable it and run plans straight through.
+
 ### 3. The Gateway — Telegram (`bot.py`, `telegram.py`)
 The **sole** control/communication interface.
 - Long-polls Telegram (dependency-light, just `httpx`).
