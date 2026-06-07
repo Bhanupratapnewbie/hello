@@ -48,8 +48,13 @@ def test_validate_runtime_reports_missing():
     s = Settings(telegram_bot_token="", telegram_admin_chat_id=0, model_api_key="")
     problems = s.validate_runtime()
     assert any("TELEGRAM_BOT_TOKEN" in p for p in problems)
-    assert any("TELEGRAM_ADMIN_CHAT_ID" in p for p in problems)
     assert any("API_KEY" in p for p in problems)
+
+
+def test_validate_runtime_admin_id_optional():
+    # Admin id 0 is fine: the bot auto-claims the first /start sender.
+    s = Settings(telegram_bot_token="t", telegram_admin_chat_id=0, model_api_key="k")
+    assert s.validate_runtime() == []
 
 
 def test_validate_runtime_clean():

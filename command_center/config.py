@@ -33,15 +33,21 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
 
     # --- Role -> model routing ---
+    # Default brain/reasoning model: a latest, fully uncensored open-weight Qwen
+    # (35B-72B class), intended to run full-precision (no quantization) on a
+    # cloud GPU box. Swap for any Qwen/Gemma uncensored build your provider serves.
     model_planner: str = Field(
-        default="nousresearch/hermes-3-llama-3.1-70b", alias="MODEL_PLANNER"
+        default="cognitivecomputations/dolphin-2.9.2-qwen2-72b", alias="MODEL_PLANNER"
     )
-    model_reasoner: str = Field(default="deepseek/deepseek-r1", alias="MODEL_REASONER")
+    model_reasoner: str = Field(
+        default="cognitivecomputations/dolphin-2.9.2-qwen2-72b", alias="MODEL_REASONER"
+    )
     model_coder: str = Field(
         default="qwen/qwen-2.5-coder-32b-instruct", alias="MODEL_CODER"
     )
+    # Low-latency role: a smaller fast model is enough for error correction.
     model_fixer: str = Field(
-        default="meta-llama/llama-3.1-8b-instruct", alias="MODEL_FIXER"
+        default="qwen/qwen-2.5-7b-instruct", alias="MODEL_FIXER"
     )
 
     # --- Execution environment ---
@@ -68,11 +74,11 @@ class Settings(BaseSettings):
 
     def validate_runtime(self) -> list[str]:
         """Return a list of human-readable problems that block running for real."""
+        # TELEGRAM_ADMIN_CHAT_ID is intentionally optional: when unset (0) the
+        # bot auto-claims the first /start sender as the administrator.
         problems: list[str] = []
         if not self.telegram_bot_token:
             problems.append("TELEGRAM_BOT_TOKEN is not set")
-        if not self.telegram_admin_chat_id:
-            problems.append("TELEGRAM_ADMIN_CHAT_ID is not set")
         if not self.effective_api_key:
             problems.append("MODEL_API_KEY / OPENROUTER_API_KEY is not set")
         return problems

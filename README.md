@@ -24,6 +24,12 @@ The model layer is **provider-agnostic** (OpenAI-compatible Chat Completions). P
 every role at any endpoint/model you want — OpenRouter, OpenAI, Together, a local
 vLLM or **Ollama** instance, etc. — via `MODEL_BASE_URL` + `MODEL_API_KEY`.
 
+**Recommended default:** route the `planner`/`reasoner` (the brain) to a latest,
+fully **uncensored** open-weight **Qwen** (35B–72B class, e.g. an abliterated /
+dolphin Qwen2.x build) served **full-precision (no quantization)** on a cloud GPU
+box (vLLM or Ollama). A smaller fast model (e.g. a 7B–32B instruct) is enough for
+the `fixer` role. Any uncensored Qwen or Gemma of similar size is a drop-in swap.
+
 ### 2. The Body — self-healing execution environment (`executor.py`)
 Runs shell commands in a workspace, captures stdout/stderr natively, and on failure
 sends the error to the `fixer` model, applies the suggested corrected command, and
@@ -65,12 +71,16 @@ first `/start` sender.
 
 ```bash
 ollama serve &
-ollama pull dolphin-mistral
+# Recommended: a large uncensored Qwen for the brain (needs a GPU box for full precision)
+ollama pull dolphin-qwen2:72b
 # in .env:
 #   MODEL_BASE_URL=http://localhost:11434/v1
 #   MODEL_API_KEY=ollama
-#   MODEL_PLANNER=dolphin-mistral   (and the other roles)
+#   MODEL_PLANNER=dolphin-qwen2:72b   (and MODEL_REASONER; smaller model for MODEL_FIXER)
 ```
+
+On a CPU-only / small box, swap in a tiny model (e.g. `ollama pull dolphin-phi`)
+just to exercise the pipeline — the brain quality will be limited.
 
 ### Deploy (ASGI)
 
