@@ -63,8 +63,11 @@ disable it and run plans straight through.
 ### 3. The Gateway — Telegram (`bot.py`, `telegram.py`)
 The **sole** control/communication interface.
 - Long-polls Telegram (dependency-light, just `httpx`).
-- **Single-administrator** access: the first person to send `/start` is locked in as
-  admin and persisted; everyone else is ignored.
+- **Administrator** access: the first person to send `/start` is locked in as admin
+  and persisted; everyone else is ignored. To share control, set
+  `CC_ADMIN_CLAIM_TOKEN` and have a collaborator send `/start <token>` — they're
+  added as an additional admin (the owner keeps their rights; all admins receive
+  output and can drive tasks).
 - Streams logs, plans, command output, and final results to the admin.
 - Pauses and asks the admin for **clarification** on ambiguous steps, then resumes.
 

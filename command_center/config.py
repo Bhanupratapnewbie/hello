@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # --- Telegram gateway ---
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_admin_chat_id: int = Field(default=0, alias="TELEGRAM_ADMIN_CHAT_ID")
+    # Shared invite token. When set, a non-admin who sends ``/start <token>`` is
+    # added as an additional administrator. This lets the owner grant access to a
+    # trusted collaborator without giving up their own admin rights (the bot
+    # supports multiple admins; all of them receive output and can drive tasks).
+    admin_claim_token: str = Field(default="", alias="CC_ADMIN_CLAIM_TOKEN")
 
     # --- Default model provider (OpenAI-compatible) ---
     # The global endpoint used by any role that does not set its own override
