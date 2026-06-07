@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_admin_chat_id: int = Field(default=0, alias="TELEGRAM_ADMIN_CHAT_ID")
 
-    # --- Model provider (OpenAI-compatible) ---
+    # --- Default model provider (OpenAI-compatible) ---
+    # The global endpoint used by any role that does not set its own override
+    # below. In the recommended setup this points at the cloud GPU box serving the
+    # uncensored open-weight base model (e.g. Ollama/vLLM at http://host:11434/v1).
     model_base_url: str = Field(
         default="https://openrouter.ai/api/v1", alias="MODEL_BASE_URL"
     )
@@ -33,24 +36,41 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
 
     # --- Role -> model routing ---
-    # Default brain/reasoning model: the latest-class, fully uncensored open-weight
-    # Qwen (Qwen3 abliterated, 32B dense — the largest dense Qwen3; the only larger
-    # Qwen3 is the 235B MoE). Intended to run full-precision (no quantization) on a
-    # cloud GPU box. Swap for any latest uncensored Qwen/Gemma build you serve.
+    # The base/brain (router). The query first hits this model: the latest-class,
+    # fully uncensored open-weight Qwen (Qwen3 abliterated, 32B dense — the largest
+    # dense Qwen3; the only larger Qwen3 is the 235B MoE). Run full-precision (no
+    # quantization) on a cloud GPU box. Swap for any latest uncensored Qwen/Gemma.
     model_planner: str = Field(
         default="huihui-ai/Qwen3-32B-abliterated", alias="MODEL_PLANNER"
     )
+    # Deep research / long-context reasoning. A frontier trained model gives the
+    # richest research output here (the uncensored base still routes the query).
     model_reasoner: str = Field(
-        default="huihui-ai/Qwen3-32B-abliterated", alias="MODEL_REASONER"
+        default="google/gemini-2.5-pro", alias="MODEL_REASONER"
     )
-    # Pure code generation: latest dedicated Qwen coder model.
+    # Pure code generation: a top-tier coding model.
     model_coder: str = Field(
-        default="qwen/qwen-2.5-coder-32b-instruct", alias="MODEL_CODER"
+        default="anthropic/claude-opus-4.1", alias="MODEL_CODER"
     )
-    # Low-latency role: a smaller fast latest-class model is enough for fixes.
+    # Low-latency role: a fast frontier model for rapid error correction.
     model_fixer: str = Field(
-        default="huihui-ai/Qwen3-8B-abliterated", alias="MODEL_FIXER"
+        default="google/gemini-2.5-flash", alias="MODEL_FIXER"
     )
+
+    # --- Per-role provider overrides ---
+    # Each role can hit its own OpenAI-compatible endpoint + key. When an override
+    # is empty it falls back to the global MODEL_BASE_URL / MODEL_API_KEY above.
+    # This lets the base/brain run on a local GPU (uncensored open weight) while
+    # the research/code/fix roles call cloud APIs (e.g. Gemini, Claude) — typically
+    # all fronted by a single OpenRouter key.
+    model_planner_base_url: str = Field(default="", alias="MODEL_PLANNER_BASE_URL")
+    model_planner_api_key: str = Field(default="", alias="MODEL_PLANNER_API_KEY")
+    model_reasoner_base_url: str = Field(default="", alias="MODEL_REASONER_BASE_URL")
+    model_reasoner_api_key: str = Field(default="", alias="MODEL_REASONER_API_KEY")
+    model_coder_base_url: str = Field(default="", alias="MODEL_CODER_BASE_URL")
+    model_coder_api_key: str = Field(default="", alias="MODEL_CODER_API_KEY")
+    model_fixer_base_url: str = Field(default="", alias="MODEL_FIXER_BASE_URL")
+    model_fixer_api_key: str = Field(default="", alias="MODEL_FIXER_API_KEY")
 
     # --- Execution environment ---
     workdir: str = Field(default="./workspace", alias="CC_WORKDIR")
@@ -73,6 +93,24 @@ class Settings(BaseSettings):
         if role not in mapping:
             raise KeyError(f"unknown model role: {role!r}")
         return mapping[role]
+
+    def role_endpoint(self, role: str) -> tuple[str, str]:
+        """Resolve (base_url, api_key) for a role, falling back to the global ones.
+
+        Lets each role target its own provider (e.g. an uncensored open-weight base
+        on a local GPU for ``planner`` while ``reasoner``/``coder``/``fixer`` call
+        cloud APIs), while keeping single-endpoint setups working unchanged.
+        """
+        overrides = {
+            "planner": (self.model_planner_base_url, self.model_planner_api_key),
+            "reasoner": (self.model_reasoner_base_url, self.model_reasoner_api_key),
+            "coder": (self.model_coder_base_url, self.model_coder_api_key),
+            "fixer": (self.model_fixer_base_url, self.model_fixer_api_key),
+        }
+        if role not in overrides:
+            raise KeyError(f"unknown model role: {role!r}")
+        base_url, api_key = overrides[role]
+        return (base_url or self.model_base_url, api_key or self.effective_api_key)
 
     def validate_runtime(self) -> list[str]:
         """Return a list of human-readable problems that block running for real."""

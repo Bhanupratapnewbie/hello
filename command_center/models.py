@@ -59,9 +59,17 @@ class ModelClient:
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
     ) -> str:
-        """Return the assistant message content for a chat completion."""
+        """Return the assistant message content for a chat completion.
+
+        ``base_url`` / ``api_key`` override the client defaults for this call,
+        which is how the brain points each role at its own provider.
+        """
         client = await self._ensure_client()
+        target_base = (base_url or self._base_url).rstrip("/")
+        target_key = api_key or self._api_key
         payload: dict[str, object] = {
             "model": model,
             "messages": [m.as_dict() for m in messages],
@@ -71,7 +79,7 @@ class ModelClient:
             payload["max_tokens"] = max_tokens
 
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {target_key}",
             "Content-Type": "application/json",
             # Optional attribution headers used by some gateways (e.g. OpenRouter).
             "HTTP-Referer": "https://github.com/Bhanupratapnewbie/hello",
@@ -80,7 +88,7 @@ class ModelClient:
 
         try:
             resp = await client.post(
-                f"{self._base_url}/chat/completions",
+                f"{target_base}/chat/completions",
                 json=payload,
                 headers=headers,
             )

@@ -74,14 +74,25 @@ class Brain:
         self.notify = notify
         self.ask_admin = ask_admin
 
+    async def _complete_role(
+        self, role: str, messages: list[ChatMessage], *, temperature: float
+    ) -> str:
+        """Run a completion for a role on that role's configured provider."""
+        base_url, api_key = self.settings.role_endpoint(role)
+        return await self.model_client.complete(
+            self.settings.role_model(role),
+            messages,
+            temperature=temperature,
+            base_url=base_url,
+            api_key=api_key,
+        )
+
     async def plan(self, request: str) -> list[Step]:
         messages = [
             ChatMessage("system", _PLANNER_SYSTEM),
             ChatMessage("user", request),
         ]
-        raw = await self.model_client.complete(
-            self.settings.role_model("planner"), messages, temperature=0.1
-        )
+        raw = await self._complete_role("planner", messages, temperature=0.1)
         return parse_plan(raw)
 
     async def handle(self, request: str) -> None:
@@ -152,8 +163,8 @@ class Brain:
             f"Requirements: {step.instruction}\n"
             f"Prior context:\n{ctx}\n"
         )
-        return await self.model_client.complete(
-            self.settings.role_model("coder"),
+        return await self._complete_role(
+            "coder",
             [ChatMessage("system", _CODER_SYSTEM), ChatMessage("user", user)],
             temperature=0.1,
         )
@@ -161,10 +172,8 @@ class Brain:
     async def _reason(self, step: Step, context: list[str]) -> str:
         ctx = ("\n".join(context))[-6000:]
         user = f"{step.prompt}\n\nPrior context:\n{ctx}"
-        return await self.model_client.complete(
-            self.settings.role_model("reasoner"),
-            [ChatMessage("user", user)],
-            temperature=0.3,
+        return await self._complete_role(
+            "reasoner", [ChatMessage("user", user)], temperature=0.3
         )
 
 

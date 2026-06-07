@@ -47,12 +47,15 @@ class CommandCenterBot:
         self._offset: int | None = None
         self._running = False
 
+        fixer_base_url, fixer_api_key = settings.role_endpoint("fixer")
         self.executor = ShellExecutor(
             workdir=settings.workdir,
             timeout=settings.command_timeout,
             max_heal_attempts=settings.max_heal_attempts,
             model_client=self.model_client,
             fixer_model=settings.role_model("fixer"),
+            fixer_base_url=fixer_base_url,
+            fixer_api_key=fixer_api_key,
             notify=self._notify,
         )
         self.brain = Brain(

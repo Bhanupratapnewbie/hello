@@ -61,12 +61,16 @@ class ShellExecutor:
         model_client: ModelClient,
         fixer_model: str,
         notify: Notifier,
+        fixer_base_url: str | None = None,
+        fixer_api_key: str | None = None,
     ) -> None:
         self.workdir = Path(workdir).expanduser().resolve()
         self.timeout = timeout
         self.max_heal_attempts = max_heal_attempts
         self.model_client = model_client
         self.fixer_model = fixer_model
+        self.fixer_base_url = fixer_base_url
+        self.fixer_api_key = fixer_api_key
         self.notify = notify
         self.workdir.mkdir(parents=True, exist_ok=True)
 
@@ -112,7 +116,11 @@ class ShellExecutor:
         ]
         try:
             raw = await self.model_client.complete(
-                self.fixer_model, messages, temperature=0.0
+                self.fixer_model,
+                messages,
+                temperature=0.0,
+                base_url=self.fixer_base_url,
+                api_key=self.fixer_api_key,
             )
         except ModelError as exc:
             return (f"fixer model unavailable: {exc}", "")

@@ -11,9 +11,20 @@ class FakeModelClient:
     def __init__(self, responses: list[str] | None = None) -> None:
         self.responses = list(responses or [])
         self.calls: list[tuple[str, list[ChatMessage]]] = []
+        self.endpoints: list[tuple[str | None, str | None]] = []
 
-    async def complete(self, model, messages, *, temperature=0.2, max_tokens=None) -> str:
+    async def complete(
+        self,
+        model,
+        messages,
+        *,
+        temperature=0.2,
+        max_tokens=None,
+        base_url=None,
+        api_key=None,
+    ) -> str:
         self.calls.append((model, messages))
+        self.endpoints.append((base_url, api_key))
         if self.responses:
             return self.responses.pop(0)
         return ""

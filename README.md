@@ -22,14 +22,25 @@ Decomposes an administrator request into ordered steps and routes each to a role
 
 The model layer is **provider-agnostic** (OpenAI-compatible Chat Completions). Point
 every role at any endpoint/model you want — OpenRouter, OpenAI, Together, a local
-vLLM or **Ollama** instance, etc. — via `MODEL_BASE_URL` + `MODEL_API_KEY`.
+vLLM or **Ollama** instance, etc. — via the global `MODEL_BASE_URL` + `MODEL_API_KEY`,
+and optionally **override the endpoint + key per role** with
+`MODEL_<ROLE>_BASE_URL` / `MODEL_<ROLE>_API_KEY` (each falls back to the global one).
 
-**Recommended default:** route the `planner`/`reasoner` (the brain) to the
-latest-class, fully **uncensored** open-weight **Qwen3** (abliterated; `Qwen3-32B`
-is the largest dense model — the only bigger Qwen3 is the 235B MoE) served
-**full-precision (no quantization)** on a cloud GPU box (vLLM or Ollama). A smaller
-fast model (e.g. `Qwen3-8B` abliterated) is enough for the `fixer` role. Any latest
-uncensored Qwen or Gemma of similar size is a drop-in swap.
+**Recommended default (the base is open weight, specialists are frontier):**
+- `planner` — the **base/brain** every query hits first: the latest-class, fully
+  **uncensored** open-weight **Qwen3** (abliterated; `Qwen3-32B` is the largest dense
+  model — the only bigger Qwen3 is the 235B MoE), served **full-precision (no
+  quantization)** on a cloud GPU box (vLLM or Ollama). Any latest uncensored
+  Qwen/Gemma is a drop-in swap.
+- `reasoner` — deep research → **Gemini 2.5 Pro** (`google/gemini-2.5-pro`).
+- `coder` — code generation → **Claude Opus 4.1** (`anthropic/claude-opus-4.1`).
+- `fixer` — fast error correction → **Gemini 2.5 Flash** (`google/gemini-2.5-flash`).
+
+The per-role overrides keep the uncensored base on your **local GPU** while the
+research/code/fix roles call cloud APIs — typically all fronted by a single
+**OpenRouter** key. Set `MODEL_<ROLE>_BASE_URL=https://openrouter.ai/api/v1` and
+`MODEL_<ROLE>_API_KEY=sk-or-...` for `reasoner`/`coder`/`fixer`; leave `planner`
+with no override so it uses the local GPU endpoint.
 
 ### 2. The Body — self-healing execution environment (`executor.py`)
 Runs shell commands in a workspace, captures stdout/stderr natively, and on failure
@@ -68,20 +79,28 @@ python -m command_center
 `TELEGRAM_ADMIN_CHAT_ID` is optional — leave it `0` and the bot auto-claims the
 first `/start` sender.
 
-### Running fully local / uncensored (no external key)
+### Recommended hybrid: uncensored base on your GPU + frontier specialists
 
 ```bash
+# On the cloud GPU box: serve the uncensored open-weight base (the brain)
 ollama serve &
-# Recommended: the latest uncensored Qwen3 for the brain (needs a GPU box for full precision)
-ollama pull huihui_ai/qwen3-abliterated:32b
+ollama pull huihui_ai/qwen3-abliterated:32b   # needs a GPU for full precision
 # in .env:
-#   MODEL_BASE_URL=http://localhost:11434/v1
+#   MODEL_BASE_URL=http://your-gpu-host:11434/v1   # base/brain endpoint
 #   MODEL_API_KEY=ollama
-#   MODEL_PLANNER=huihui-ai/Qwen3-32B-abliterated   (and MODEL_REASONER; smaller Qwen3 for MODEL_FIXER)
+#   MODEL_PLANNER=huihui-ai/Qwen3-32B-abliterated  # uncensored base (no override)
+#   # research/code/fix via one OpenRouter key:
+#   MODEL_REASONER=google/gemini-2.5-pro      MODEL_REASONER_BASE_URL=https://openrouter.ai/api/v1  MODEL_REASONER_API_KEY=sk-or-...
+#   MODEL_CODER=anthropic/claude-opus-4.1     MODEL_CODER_BASE_URL=https://openrouter.ai/api/v1     MODEL_CODER_API_KEY=sk-or-...
+#   MODEL_FIXER=google/gemini-2.5-flash       MODEL_FIXER_BASE_URL=https://openrouter.ai/api/v1     MODEL_FIXER_API_KEY=sk-or-...
 ```
 
-On a CPU-only / small box, swap in a tiny model (e.g. `ollama pull dolphin-phi`)
-just to exercise the pipeline — the brain quality will be limited.
+### Running fully local (no external key)
+
+Leave every role on the single local endpoint (no per-role overrides) and point
+all four `MODEL_*` ids at locally served models. On a CPU-only / small box, swap in
+a tiny model (e.g. `ollama pull dolphin-phi`) just to exercise the pipeline — the
+brain quality will be limited.
 
 ### Deploy (ASGI)
 

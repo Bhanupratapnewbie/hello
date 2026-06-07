@@ -34,6 +34,34 @@ def test_role_model_unknown():
     raise AssertionError("expected KeyError")
 
 
+def test_role_endpoint_falls_back_to_global():
+    s = _settings(model_base_url="http://gpu:11434/v1", model_api_key="g")
+    assert s.role_endpoint("planner") == ("http://gpu:11434/v1", "g")
+    assert s.role_endpoint("reasoner") == ("http://gpu:11434/v1", "g")
+
+
+def test_role_endpoint_per_role_override():
+    s = _settings(
+        model_base_url="http://gpu:11434/v1",
+        model_api_key="g",
+        model_reasoner_base_url="https://openrouter.ai/api/v1",
+        model_reasoner_api_key="or",
+    )
+    # Overridden role uses its own endpoint + key.
+    assert s.role_endpoint("reasoner") == ("https://openrouter.ai/api/v1", "or")
+    # Non-overridden role still falls back to the global endpoint.
+    assert s.role_endpoint("planner") == ("http://gpu:11434/v1", "g")
+
+
+def test_role_endpoint_unknown():
+    s = _settings()
+    try:
+        s.role_endpoint("nope")
+    except KeyError:
+        return
+    raise AssertionError("expected KeyError")
+
+
 def test_effective_api_key_fallback():
     s = _settings(model_api_key="", openrouter_api_key="or-key")
     assert s.effective_api_key == "or-key"
