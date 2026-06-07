@@ -33,21 +33,23 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
 
     # --- Role -> model routing ---
-    # Default brain/reasoning model: a latest, fully uncensored open-weight Qwen
-    # (35B-72B class), intended to run full-precision (no quantization) on a
-    # cloud GPU box. Swap for any Qwen/Gemma uncensored build your provider serves.
+    # Default brain/reasoning model: the latest-class, fully uncensored open-weight
+    # Qwen (Qwen3 abliterated, 32B dense — the largest dense Qwen3; the only larger
+    # Qwen3 is the 235B MoE). Intended to run full-precision (no quantization) on a
+    # cloud GPU box. Swap for any latest uncensored Qwen/Gemma build you serve.
     model_planner: str = Field(
-        default="cognitivecomputations/dolphin-2.9.2-qwen2-72b", alias="MODEL_PLANNER"
+        default="huihui-ai/Qwen3-32B-abliterated", alias="MODEL_PLANNER"
     )
     model_reasoner: str = Field(
-        default="cognitivecomputations/dolphin-2.9.2-qwen2-72b", alias="MODEL_REASONER"
+        default="huihui-ai/Qwen3-32B-abliterated", alias="MODEL_REASONER"
     )
+    # Pure code generation: latest dedicated Qwen coder model.
     model_coder: str = Field(
         default="qwen/qwen-2.5-coder-32b-instruct", alias="MODEL_CODER"
     )
-    # Low-latency role: a smaller fast model is enough for error correction.
+    # Low-latency role: a smaller fast latest-class model is enough for fixes.
     model_fixer: str = Field(
-        default="qwen/qwen-2.5-7b-instruct", alias="MODEL_FIXER"
+        default="huihui-ai/Qwen3-8B-abliterated", alias="MODEL_FIXER"
     )
 
     # --- Execution environment ---
