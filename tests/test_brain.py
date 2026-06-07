@@ -61,6 +61,21 @@ def test_parse_plan_invalid():
     assert parse_plan("no json here") == []
 
 
+def test_parse_plan_salvages_truncated_json():
+    # Two complete steps then a third cut off mid-string (truncation), with no
+    # closing braces for the array/object — the complete two must be recovered.
+    raw = (
+        '{"steps": ['
+        '{"action": "shell", "description": "a", "command": "mkdir site"}, '
+        '{"action": "write_file", "description": "b", "path": "site/index.html", '
+        '"instruction": "landing page"}, '
+        '{"action": "shell", "description": "c", "command": "echo <!DOCTYPE html'
+    )
+    steps = parse_plan(raw)
+    assert [s.action for s in steps] == ["shell", "write_file"]
+    assert steps[1].path == "site/index.html"
+
+
 @pytest.mark.asyncio
 async def test_raw_shell_passthrough(tmp_path):
     notifier = CollectingNotifier()
@@ -97,13 +112,55 @@ async def test_write_file_step(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_clarify_step(tmp_path):
-    plan = '{"steps": [{"action": "clarify", "description": "ask", "question": "which port?"}]}'
-    model = FakeModelClient([plan])
+async def test_clarify_only_plan_replans_with_answer(tmp_path):
+    # A clarify-only plan must not end the task: the answer is collected and the
+    # request re-planned into real work.
+    clarify = (
+        '{"steps": [{"action": "clarify", "description": "ask", '
+        '"question": "which port?"}]}'
+    )
+    real = (
+        '{"steps": [{"action": "shell", "description": "deploy", '
+        '"command": "echo deploying"}]}'
+    )
+    model = FakeModelClient([clarify, real])
     notifier = CollectingNotifier()
     brain = _brain(tmp_path, model, notifier, ask_answers=["8080"])
     await brain.handle("deploy something")
+    assert "deploying" in notifier.transcript
     assert "all steps complete" in notifier.transcript
+    # The admin's answer was folded into the re-plan request.
+    replan_messages = model.calls[-1][1]
+    assert any("8080" in m.content for m in replan_messages)
+
+
+@pytest.mark.asyncio
+async def test_plan_retries_until_valid(tmp_path):
+    # First reply is unusable prose; the planner is nudged and the retry yields a
+    # valid plan instead of giving up with "nothing to do".
+    good = (
+        '{"steps": [{"action": "shell", "description": "hi", '
+        '"command": "echo hi"}]}'
+    )
+    model = FakeModelClient(["sorry, here is what I think...", good])
+    notifier = CollectingNotifier()
+    brain = _brain(tmp_path, model, notifier)
+    await brain.handle("do the thing")
+    assert "hi" in notifier.transcript
+    assert "all steps complete" in notifier.transcript
+    assert "nothing to do" not in notifier.transcript
+
+
+@pytest.mark.asyncio
+async def test_plan_gives_up_after_attempts(tmp_path):
+    model = FakeModelClient(["nope", "still nope", "nope again"])
+    notifier = CollectingNotifier()
+    settings = _settings(tmp_path, plan_attempts=3)
+    brain = _brain(tmp_path, model, notifier, settings=settings)
+    await brain.handle("impossible to parse")
+    assert "planner produced no steps; nothing to do" in notifier.transcript
+    # It actually tried the configured number of times.
+    assert len(model.calls) == 3
 
 
 # --- Supervisor (watchdog) ---------------------------------------------------

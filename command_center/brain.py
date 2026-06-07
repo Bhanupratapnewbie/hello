@@ -38,7 +38,12 @@ _PLANNER_SYSTEM = (
     '- {"action": "clarify", "description": str, "question": str}\n'
     "Use the minimum number of steps. Prefer a single shell step for simple "
     "commands. Use clarify only when a parameter is genuinely ambiguous and you "
-    "cannot proceed."
+    "cannot proceed.\n"
+    "IMPORTANT: To create or overwrite a file, ALWAYS use the write_file action "
+    "with a short natural-language 'instruction' describing the file's contents. "
+    "NEVER embed file bodies inside a shell command (no heredocs, no 'cat > file "
+    "<< EOF', no large 'echo'). Keep every step's JSON small so the plan stays "
+    "valid — the code-generation model fills in the actual file contents later."
 )
 
 _CODER_SYSTEM = (
@@ -97,7 +102,12 @@ class Brain:
         self.ask_admin = ask_admin
 
     async def _complete_role(
-        self, role: str, messages: list[ChatMessage], *, temperature: float
+        self,
+        role: str,
+        messages: list[ChatMessage],
+        *,
+        temperature: float,
+        max_tokens: int | None = None,
     ) -> str:
         """Run a completion for a role on that role's configured provider."""
         base_url, api_key = self.settings.role_endpoint(role)
@@ -105,17 +115,46 @@ class Brain:
             self.settings.role_model(role),
             messages,
             temperature=temperature,
+            max_tokens=max_tokens,
             base_url=base_url,
             api_key=api_key,
         )
 
     async def plan(self, request: str) -> list[Step]:
+        """Build a plan, re-asking the model when it returns no usable steps.
+
+        The planner sometimes replies with prose or truncated/empty JSON; instead
+        of silently giving up we nudge it (up to ``plan_attempts`` times) to emit a
+        valid, non-empty JSON plan.
+        """
         messages = [
             ChatMessage("system", _PLANNER_SYSTEM),
             ChatMessage("user", request),
         ]
-        raw = await self._complete_role("planner", messages, temperature=0.1)
-        return parse_plan(raw)
+        attempts = max(1, self.settings.plan_attempts)
+        for attempt in range(attempts):
+            raw = await self._complete_role(
+                "planner",
+                messages,
+                temperature=0.1,
+                max_tokens=self.settings.plan_max_tokens,
+            )
+            steps = parse_plan(raw)
+            if steps:
+                return steps
+            if attempt < attempts - 1:
+                messages.append(ChatMessage("assistant", raw[:1000]))
+                messages.append(
+                    ChatMessage(
+                        "user",
+                        "That was not usable. Respond with ONLY a JSON object "
+                        '{"steps": [...]} containing at least one concrete, '
+                        "executable step (shell / write_file / reason). Do not "
+                        "return prose, an empty list, or only a clarify step "
+                        "unless a parameter is truly unknowable.",
+                    )
+                )
+        return []
 
     async def handle(self, request: str) -> None:
         request = request.strip()
@@ -133,6 +172,24 @@ class Brain:
         await self.notify("analysing request and building plan...")
         try:
             steps = await self.plan(request)
+            # If the planner only wants clarification, answer it and re-plan so a
+            # task isn't ended just because a question was asked.
+            rounds = 0
+            while (
+                steps
+                and all(s.action == "clarify" for s in steps)
+                and rounds < self.settings.max_clarify_rounds
+            ):
+                answers = []
+                for s in steps:
+                    answer = await self.ask_admin(s.question)
+                    answers.append(f"- {s.question} -> {answer}")
+                request = (
+                    f"{request}\n\nAdditional details provided by the "
+                    f"administrator:\n" + "\n".join(answers)
+                )
+                rounds += 1
+                steps = await self.plan(request)
         except ModelError as exc:
             await self.notify(f"planner model error: {exc}")
             return
@@ -350,14 +407,17 @@ def parse_plan(raw: str) -> list[Step]:
             text = text.split("\n", 1)[1]
     start = text.find("{")
     end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return []
-    try:
-        data = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return []
+    raw_steps: list[object] = []
+    if start != -1 and end != -1 and end > start:
+        try:
+            raw_steps = json.loads(text[start : end + 1]).get("steps", [])
+        except (json.JSONDecodeError, AttributeError):
+            raw_steps = []
+    if not raw_steps:
+        # The response was likely truncated mid-JSON (e.g. a huge inline file
+        # body). Salvage every complete step object that did come through.
+        raw_steps = _salvage_step_objects(text)
 
-    raw_steps = data.get("steps", [])
     steps: list[Step] = []
     for item in raw_steps:
         if not isinstance(item, dict):
@@ -377,6 +437,49 @@ def parse_plan(raw: str) -> list[Step]:
             )
         )
     return steps
+
+
+def _salvage_step_objects(text: str) -> list[dict]:
+    """Recover complete ``{...}`` step objects from truncated/invalid JSON.
+
+    Walks the text respecting string escaping, and json-parses each balanced
+    top-level object that appears after the ``"steps"`` array opens, skipping any
+    final object cut off by truncation.
+    """
+    anchor = text.find('"steps"')
+    scan = text[anchor:] if anchor != -1 else text
+    objects: list[dict] = []
+    depth = 0
+    in_str = False
+    escaped = False
+    obj_start = -1
+    for i, ch in enumerate(scan):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and obj_start != -1:
+                    try:
+                        parsed = json.loads(scan[obj_start : i + 1])
+                    except json.JSONDecodeError:
+                        parsed = None
+                    if isinstance(parsed, dict) and "action" in parsed:
+                        objects.append(parsed)
+                    obj_start = -1
+    return objects
 
 
 def _step_signature(step: Step) -> str:

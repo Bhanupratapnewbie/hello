@@ -82,6 +82,19 @@ class Settings(BaseSettings):
     command_timeout: int = Field(default=300, alias="CC_COMMAND_TIMEOUT")
     max_heal_attempts: int = Field(default=3, alias="CC_MAX_HEAL_ATTEMPTS")
 
+    # --- Planning robustness ---
+    # The planner occasionally returns prose or truncated/empty JSON. Rather than
+    # giving up ("nothing to do"), re-ask it up to this many times with a stricter
+    # nudge until it yields a valid, non-empty plan.
+    plan_attempts: int = Field(default=3, alias="CC_PLAN_ATTEMPTS")
+    # Token budget for the planner so large multi-step plans don't get truncated
+    # mid-JSON (which would otherwise fail to parse into steps).
+    plan_max_tokens: int = Field(default=4096, alias="CC_PLAN_MAX_TOKENS")
+    # When the only thing the planner asks for is clarification, collect the
+    # admin's answer(s) and re-plan with them — up to this many rounds — instead
+    # of ending the task after merely asking a question.
+    max_clarify_rounds: int = Field(default=2, alias="CC_MAX_CLARIFY_ROUNDS")
+
     # --- Progress supervisor (watchdog) ---
     # A meta-layer that watches the whole task: it caps the total number of steps,
     # detects when the same action repeats (a loop), and periodically asks the
